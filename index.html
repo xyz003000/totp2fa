@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TOTP 一次性密码生成器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f0f2f5; color: #333; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .card {
+    background: #fff; border-radius: 16px; padding: 28px;
+    width: 100%; max-width: 420px; box-shadow: 0 4px 24px rgba(0,0,0,.08);
+  }
+  h1 { font-size: 20px; margin-bottom: 20px; text-align: center; }
+  label { display: block; font-size: 13px; color: #666; margin-bottom: 6px; }
+  input, select {
+    width: 100%; padding: 10px 12px; border: 1px solid #d9d9d9; border-radius: 8px;
+    font-size: 14px; outline: none; background: #fff; transition: border-color .2s;
+  }
+  input:focus, select:focus { border-color: #4a90d9; }
+  .form-row { margin-bottom: 16px; }
+  .form-row input { font-family: ui-monospace, "SF Mono", Consolas, monospace; letter-spacing: 1px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 12px; margin-bottom: 22px; }
+  .token-area { text-align: center; margin: 24px 0 8px; position: relative; }
+  .token {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    font-size: 40px; letter-spacing: 6px; color: #bbb;
+    transition: color .3s;
+  }
+  .token.active { color: #1a73e8; }
+  @keyframes pop { 0% { transform: scale(.95); opacity: .4; } 100% { transform: scale(1); opacity: 1; } }
+  .token.pop { animation: pop .35s ease; }
+  .ring-wrap { position: relative; width: 56px; height: 56px; margin: 12px auto 0; }
+  .ring-wrap svg { display: block; transform: rotate(-90deg); }
+  .ring-bg { fill: none; stroke: #e0e0e0; stroke-width: 5; }
+  .ring-fg { fill: none; stroke: #1a73e8; stroke-width: 5; stroke-linecap: round;
+             transition: stroke-dashoffset .2s linear; }
+  .ring-text {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 600; color: #1a73e8;
+  }
+  .share { margin-top: 26px; padding-top: 20px; border-top: 1px solid #f0f0f0; }
+  .share-row { display: flex; gap: 8px; }
+  .share-row input { flex: 1; font-size: 12px; color: #666; background: #fafafa; }
+  .share-row input:focus { border-color: #d9d9d9; background: #fff; }
+  button {
+    padding: 10px 16px; background: #1a73e8; color: #fff; border: none;
+    border-radius: 8px; font-size: 13px; cursor: pointer; white-space: nowrap;
+    transition: background .2s;
+  }
+  button:hover { background: #1765cc; }
+  button:active { transform: scale(.97); }
+  .hint { font-size: 12px; color: #888; margin-top: 10px; line-height: 1.6; }
+  .hint code {
+    background: #f5f5f5; padding: 1px 5px; border-radius: 4px;
+    font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all;
+  }
+  .warn {
+    margin-top: 16px; padding: 10px 12px; background: #fff7e6; border: 1px solid #ffd591;
+    border-radius: 8px; font-size: 12px; color: #ad6800; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>🔐 TOTP 验证码生成器</h1>
+
+  <div class="form-row">
+    <label for="secret">密钥（Base32）</label>
+    <input id="secret" type="text" value="JBSWY3DPEHPK3PXP" placeholder="例如 JBSWY3DPEHPK3PXP"
+           autocomplete="off" spellcheck="false">
+  </div>
+
+  <div class="form-grid">
+    <div>
+      <label for="period">有效期(秒)</label>
+      <input id="period" type="number" min="1" max="3600" value="30">
+    </div>
+    <div>
+      <label for="digits">位数</label>
+      <select id="digits">
+        <option value="6" selected>6</option>
+        <option value="7">7</option>
+        <option value="8">8</option>
+      </select>
+    </div>
+    <div>
+      <label for="algorithm">算法</label>
+      <select id="algorithm">
+        <option>SHA1</option>
+        <option>SHA224</option>
+        <option>SHA256</option>
+        <option>SHA384</option>
+        <option>SHA512</option>
+        <option>SHA3-224</option>
+        <option>SHA3-256</option>
+        <option>SHA3-384</option>
+        <option>SHA3-512</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="token-area">
+    <div id="token" class="token">------</div>
+    <div class="ring-wrap">
+      <svg width="56" height="56" viewBox="0 0 56 56">
+        <circle class="ring-bg" cx="28" cy="28" r="24"
+                fill="none" stroke="#e0e0e0" stroke-width="5"></circle>
+        <circle class="ring-fg" id="ringFg" cx="28" cy="28" r="24"
+                fill="none" stroke="#1a73e8" stroke-width="5" stroke-linecap="round"
+                stroke-dasharray="150.8" stroke-dashoffset="150.8"></circle>
+      </svg>
+      <div class="ring-text" id="countdown">--</div>
+    </div>
+  </div>
+
+  <div class="share">
+    <label for="shareLink">保存链接</label>
+    <div class="share-row">
+      <input id="shareLink" type="text" readonly>
+      <button id="copyBtn">复制</button>
+    </div>
+    <p class="hint">
+      使用方式：访问 <code id="exampleUrl"></code>，
+      将 YOUR_SECRET_KEY 替换为您的实际密钥即可自动填充并生成验证码。
+      可选参数：<code>period</code>、<code>digits</code>、<code>algorithm</code>。
+    </p>
+  </div>
+
+  <p class="warn">⚠️ 安全提示：密钥出现在 URL 中时，会留在浏览器历史记录里；
+  此链接等同于您的动态口令种子，请勿通过不可信渠道分享。建议仅在本地或可信环境使用。</p>
+</div>
+<!-- 
+<script src="https://unpkg.com/otpauth@9.1.4/dist/otpauth.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+ -->
+<script src="https://registry.npmmirror.com/otpauth/9.1.4/files/dist/otpauth.umd.min.js" integrity="sha512-ljhPo7TzwhLJ2q9IABmK6yfABUcghGTH4Yn/52yw9iE3mDgucoy2b9L+DteZovmAHsK1X6JuqdsFyaqi9Ccx5A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var secretEl = $('secret'), periodEl = $('period'), digitsEl = $('digits'), algoEl = $('algorithm');
+  var tokenEl = $('token'), countdownEl = $('countdown'), ringFg = $('ringFg');
+  var shareLinkEl = $('shareLink'), copyBtn = $('copyBtn'), exampleUrlEl = $('exampleUrl');
+
+  var RING_C = 2 * Math.PI * 24; // 圆环周长 ≈ 150.8
+  ringFg.style.strokeDasharray = RING_C;
+
+  // ---------- URL 参数解析：?code=xxx 自动填充 ----------
+  var params = new URLSearchParams(location.search);
+  if (params.get('code'))      secretEl.value  = params.get('code');
+  if (params.get('period'))    periodEl.value  = params.get('period');
+  if (params.get('digits'))    digitsEl.value  = params.get('digits');
+  if (params.get('algorithm')) algoEl.value    = params.get('algorithm').toUpperCase();
+
+  var totp = null;      // 当前的 TOTP 对象
+  var lastToken = null; // 上一次生成的验证码，用于判断是否刷新
+
+  // ---------- 工具函数 ----------
+  function normalizeSecret(s) {
+    return (s || '').replace(/\s+/g, '').toUpperCase().replace(/=+$/, '');
+  }
+  function isBase32(s) { return /^[A-Z2-7]*$/.test(s); }
+  function currentPeriod() { return parseInt(periodEl.value, 10) || 30; }
+  function shareBase() {
+    // 用 location.href 而非 origin+pathname，file:// 本地打开也能得到正确链接
+    return location.href.split(/[?#]/)[0] + '?code=';
+  }
+
+  // ---------- 构建 ----------
+  function build() {
+    var secret = normalizeSecret(secretEl.value);
+    var base = shareBase();
+
+    if (!secret || !isBase32(secret)) {
+      totp = null; lastToken = null;
+      tokenEl.textContent = '------';
+      tokenEl.classList.remove('active');
+      countdownEl.textContent = '--';
+      ringFg.style.strokeDashoffset = RING_C;
+      shareLinkEl.value = base + (secret ? secret : 'YOUR_SECRET_KEY');
+      exampleUrlEl.textContent = base + 'YOUR_SECRET_KEY';
+      return;
+    }
+
+    try {
+      totp = new OTPAuth.TOTP({
+        issuer: 'TOTP',
+        label: 'Local',
+        algorithm: algoEl.value,
+        digits: parseInt(digitsEl.value, 10) || 6,
+        period: currentPeriod(),
+        secret: OTPAuth.Secret.fromBase32(secret)
+      });
+    } catch (e) {
+      totp = null;
+      tokenEl.textContent = 'ERROR';
+      tokenEl.classList.remove('active');
+      return;
+    }
+
+    shareLinkEl.value = base + secret;
+    exampleUrlEl.textContent = base + 'YOUR_SECRET_KEY';
+    refresh();
+  }
+
+  function refresh() {
+    if (!totp) return;
+
+    // ==== 修复点 1：倒计时改为自算，不再调用不存在的 totp.remaining() ====
+    // TOTP 时间片以 Unix 纪元对齐：counter = floor(now / period)，
+    // 因此距下次换码的剩余毫秒数 = periodMs - (nowMs % periodMs)。
+    var periodMs = currentPeriod() * 1000;
+    var nowMs = Date.now();
+    var remainingMs = periodMs - (nowMs % periodMs);
+    var pct = Math.max(0, Math.min(1, remainingMs / periodMs));
+
+    countdownEl.textContent = Math.ceil(remainingMs / 1000) + 's';
+    ringFg.style.strokeDashoffset = RING_C * (1 - pct);
+
+    // ==== 修复点 2：令牌生成放入独立 try，出错也不影响上面的倒计时 ====
+    try {
+      var token = totp.generate();
+      if (token !== lastToken) {
+        lastToken = token;
+        tokenEl.textContent = token;
+        tokenEl.classList.add('active', 'pop');
+        setTimeout(function () { tokenEl.classList.remove('pop'); }, 400);
+      }
+    } catch (e) {
+      tokenEl.textContent = 'ERROR';
+      tokenEl.classList.remove('active');
+    }
+  }
+
+  // ---------- 事件绑定 ----------
+  [secretEl, periodEl, digitsEl, algoEl].forEach(function (el) {
+    el.addEventListener('input', build);
+    el.addEventListener('change', build);
+  });
+
+  copyBtn.addEventListener('click', async function () {
+    var text = shareLinkEl.value;
+    if (!text || text.indexOf('YOUR_SECRET_KEY') !== -1) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      shareLinkEl.select();
+      document.execCommand('copy');
+    }
+    var old = copyBtn.textContent;
+    copyBtn.textContent = '已复制 ✓';
+    setTimeout(function () { copyBtn.textContent = old; }, 1200);
+  });
+
+  setInterval(refresh, 200); // 令牌只在周期边界变化；环形进度按毫秒平滑推进
+  build();
+})();
+</script>
+</body>
+</html>
